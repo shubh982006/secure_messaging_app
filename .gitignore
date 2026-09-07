@@ -34,3 +34,7 @@ next-env.d.ts
 
 # Uploaded attachments
 backend/media/
+
+# Next.js generated agent rule files
+frontend/AGENTS.md
+frontend/CLAUDE.md

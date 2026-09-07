@@ -47,6 +47,9 @@ cp .env.example .env                 # every value already has a working default
 uvicorn app.main:app --reload --port 8000
 ```
 
+To run on a different port, change the `--port` flag and add that origin to
+`CORS_ORIGINS` in `backend/.env`.
+
 On first boot the app runs `alembic upgrade head` and seeds demo users, conversations
 and message history, so the API is usable immediately. `GET /health` should return `{"status":"ok"}`.
 
@@ -55,13 +58,18 @@ and message history, so the API is usable immediately. `GET /health` should retu
 ```bash
 cd frontend
 npm install
-cp .env.example .env.local           # defaults to http://localhost:8000
+cp .env.example .env.local           # points at the backend; defaults to http://localhost:8000
 npm run dev                          # http://localhost:3000
 ```
 
-> If `npm run dev` renders the page but nothing is clickable, the dev server's HMR socket is
-> being blocked by your environment. `npm run build && npm start` behaves identically and is
-> unaffected.
+Both `dev` and `start` honour `PORT`, so `PORT=3001 npm run dev` moves the app if 3000 is taken.
+`NEXT_PUBLIC_API_URL` must match wherever the backend is listening, and that origin must appear in
+the backend's `CORS_ORIGINS`.
+
+> **If the page renders but nothing is clickable in dev**, you are loading it from an origin Next
+> does not treat as trusted, so it blocks `/_next/hmr` and the app never hydrates. `next.config.mjs`
+> already allows `localhost`, `127.0.0.1` and `0.0.0.0`; add any other host (a LAN IP, a tunnel
+> domain) to `allowedDevOrigins` there.
 
 ---
 
