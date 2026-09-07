@@ -116,3 +116,40 @@ class TestRateLimiter:
         assert limiter.allow("u1") is True
         assert limiter.allow("u2") is True
         assert limiter.allow("u1") is False
+
+
+class TestLinkPreviewParsing:
+    """Pure parsing and SSRF validation - no database, no event loop."""
+
+    def test_extracts_open_graph_tags(self):
+        from app.services.link_service import _OpenGraphParser
+
+        parser = _OpenGraphParser()
+        parser.feed("""
+            <html><head>
+              <title>Fallback title</title>
+              <meta property="og:title" content="Real Title">
+              <meta property="og:description" content="A description &amp; more">
+              <meta property="og:image" content="/cover.png">
+              <meta property="og:site_name" content="Example">
+            </head><body></body></html>
+        """)
+        assert parser.meta["og:title"] == "Real Title"
+        assert parser.meta["og:site_name"] == "Example"
+        assert parser.title == "Fallback title"
+
+    def test_falls_back_to_the_title_tag(self):
+        from app.services.link_service import _OpenGraphParser
+
+        parser = _OpenGraphParser()
+        parser.feed("<html><head><title>Just a title</title></head></html>")
+        assert parser.title == "Just a title"
+        assert "og:title" not in parser.meta
+
+    def test_address_check_rejects_private_ranges(self):
+        from app.services.link_service import _is_public_address
+
+        assert _is_public_address("127.0.0.1") is False
+        assert _is_public_address("10.1.2.3") is False
+        assert _is_public_address("169.254.169.254") is False
+        assert _is_public_address("this-host-does-not-exist.invalid") is False

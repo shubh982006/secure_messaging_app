@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.base import Base
+from app.db.search_index import ensure_search_index
 from app.db.session import SessionFactory, engine
 from app.models import User
 
@@ -46,6 +47,9 @@ async def create_schema() -> None:
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        # Metadata cannot express an FTS5 virtual table + triggers, so the
+        # search index is applied explicitly on this path too.
+        await connection.run_sync(ensure_search_index)
     logger.info("schema: metadata.create_all")
 
 

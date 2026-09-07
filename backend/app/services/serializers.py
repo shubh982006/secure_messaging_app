@@ -39,13 +39,29 @@ STATUS_READ = "read"
 
 
 def preview_text(message: Message) -> str:
+    """The one-line summary shown in the conversation list."""
     if message.deleted_at is not None:
         return "This message was deleted"
+    if message.content:
+        return message.content[:PREVIEW_LIMIT]
+
+    # No caption: describe the attachment instead of showing an empty row.
+    attachment = message.attachments[0] if message.attachments else None
+    if attachment is not None:
+        mime = attachment.mime_type or ""
+        if mime.startswith("audio/"):
+            return "Voice message"
+        if mime.startswith("image/"):
+            return "Photo"
+        if mime.startswith("video/"):
+            return "Video"
+        return attachment.name or "Attachment"
+
     if message.type == MessageType.IMAGE:
         return "Photo"
     if message.type == MessageType.FILE:
         return "Attachment"
-    return (message.content or "")[:PREVIEW_LIMIT]
+    return ""
 
 
 def receipt_counts(

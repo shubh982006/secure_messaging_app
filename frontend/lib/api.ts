@@ -2,8 +2,10 @@ import type {
   Attachment,
   ApiErrorBody,
   Conversation,
+  LinkPreview,
   Me,
   Message,
+  MessageSearchHit,
   UploadedAttachment,
   User,
 } from "./types";
@@ -286,6 +288,18 @@ export const api = {
   },
 
   deleteMessage: (id: string) => request<void>(`/messages/${id}`, { method: "DELETE" }),
+
+  /** Full-text search across every conversation the user belongs to. */
+  searchMessages: (q: string, conversationId?: string) => {
+    const search = new URLSearchParams({ q });
+    if (conversationId) search.set("conversation_id", conversationId);
+    return request<{ results: MessageSearchHit[]; query: string }>(
+      `/search/messages?${search.toString()}`,
+    );
+  },
+
+  linkPreview: (url: string) =>
+    request<LinkPreview>(`/links/preview?url=${encodeURIComponent(url)}`),
 
   addReaction: (id: string, emoji: string) =>
     request<Message>(`/messages/${id}/reactions`, { method: "POST", body: { emoji } }),

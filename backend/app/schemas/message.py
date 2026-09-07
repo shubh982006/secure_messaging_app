@@ -95,3 +95,18 @@ class ReadMarkerIn(BaseModel):
 class ReadMarkerOut(BaseModel):
     unread_count: int
     last_read_seq: int
+
+
+class MessageSearchHit(BaseModel):
+    """One search result, with just enough context to render a result row."""
+
+    message: MessageOut
+    conversation_id: str
+    conversation_name: str | None = None
+    conversation_type: str
+    snippet: str
+
+
+class MessageSearchResponse(BaseModel):
+    results: list[MessageSearchHit]
+    query: str

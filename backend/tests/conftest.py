@@ -17,6 +17,7 @@ from sqlalchemy.pool import NullPool, StaticPool  # noqa: E402
 
 from app.api.deps import get_db  # noqa: E402
 from app.db.base import Base  # noqa: E402
+from app.db.search_index import ensure_search_index  # noqa: E402
 from app.main import app  # noqa: E402
 from app.ws.manager import InMemoryConnectionManager  # noqa: E402
 
@@ -44,6 +45,7 @@ async def engine():
             # Each test gets a pristine schema; Postgres has no in-memory mode.
             await connection.run_sync(Base.metadata.drop_all)
             await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(ensure_search_index)
         yield test_engine
         async with test_engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)
@@ -58,6 +60,7 @@ async def engine():
     )
     async with test_engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.run_sync(ensure_search_index)
     yield test_engine
     await test_engine.dispose()
 

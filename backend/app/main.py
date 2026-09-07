@@ -17,7 +17,9 @@ from app.api.routes import (
     auth,
     contacts,
     conversations,
+    links,
     messages,
+    search,
     users,
 )
 from app.core.config import settings
@@ -170,6 +172,8 @@ for router in (
     conversations.router,
     messages.router,
     attachments.router,
+    search.router,
+    links.router,
 ):
     app.include_router(router, prefix=settings.api_prefix)
 

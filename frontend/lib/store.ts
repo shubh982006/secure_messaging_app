@@ -75,6 +75,25 @@ function sortConversations(list: Conversation[]): Conversation[] {
   );
 }
 
+/** The one-line summary shown in the conversation list. Mirrors the server's
+ *  preview_text so an optimistic row and a fetched one read the same. */
+function previewFor(message: {
+  content: string | null;
+  attachments: Attachment[];
+  type: string;
+}): string {
+  if (message.content) return message.content;
+  const attachment = message.attachments[0];
+  if (attachment) {
+    const mime = attachment.mime_type ?? "";
+    if (mime.startsWith("audio/")) return "Voice message";
+    if (mime.startsWith("image/")) return "Photo";
+    if (mime.startsWith("video/")) return "Video";
+    return attachment.name ?? "Attachment";
+  }
+  return message.type === "image" ? "Photo" : message.type === "file" ? "Attachment" : "";
+}
+
 /** Merge a server message into a thread, reconciling the optimistic bubble. */
 function mergeMessage(thread: Message[], incoming: Message): Message[] {
   const index = thread.findIndex(
@@ -257,7 +276,11 @@ export const useStore = create<State>((set, get) => ({
                   sender_id: me.id,
                   sender_name: me.display_name,
                   type: messageType,
-                  preview: body || (messageType === "image" ? "Photo" : "Attachment"),
+                  preview: previewFor({
+                    content: body || null,
+                    attachments,
+                    type: messageType,
+                  }),
                   seq: nextSeq,
                   created_at: optimistic.created_at,
                   status: "sending",
@@ -519,7 +542,7 @@ function handleEvent(event: WsEnvelope) {
                   sender_id: message.sender_id,
                   sender_name: null,
                   type: message.type,
-                  preview: message.content ?? "",
+                  preview: previewFor(message),
                   seq: message.seq,
                   created_at: message.created_at,
                   status: message.status,

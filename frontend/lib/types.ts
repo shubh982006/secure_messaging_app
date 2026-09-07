@@ -129,3 +129,19 @@ export interface ApiErrorBody {
   message: string;
   detail?: Record<string, unknown>;
 }
+
+export interface LinkPreview {
+  url: string;
+  title: string | null;
+  description: string | null;
+  image: string | null;
+  site_name: string | null;
+}
+
+export interface MessageSearchHit {
+  message: Message;
+  conversation_id: string;
+  conversation_name: string | null;
+  conversation_type: ConversationType;
+  snippet: string;
+}

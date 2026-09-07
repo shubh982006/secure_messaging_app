@@ -370,7 +370,7 @@ export function ChatPane({ conversation, onOpenInfo }: Props) {
             !next || next.sender_id !== message.sender_id || next.type === "system";
 
           return (
-            <div key={message.id} id={`message-${message.id}`}>
+            <div key={message.id} id={`message-${message.id}`} className="message-row">
               {showDivider && (
                 <div className="my-4 flex justify-center">
                   <span className="rounded-full px-3 py-1 text-[11.5px] font-medium uppercase tracking-wide text-sig-text-3">

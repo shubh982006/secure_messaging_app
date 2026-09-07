@@ -388,3 +388,38 @@ export function KeyboardIcon(props: IconProps) {
     </svg>
   );
 }
+
+
+export function PlayIcon(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M7 4.5v15l12-7.5-12-7.5Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function PauseIcon(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="6.5" y="4.5" width="3.5" height="15" rx="1" fill="currentColor" />
+      <rect x="14" y="4.5" width="3.5" height="15" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function StopIcon(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function LinkIcon(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+      <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+    </svg>
+  );
+}

@@ -14,6 +14,7 @@ import {
   MicIcon,
   PlusIcon,
   SendIcon,
+  StopIcon,
   TimerIcon,
 } from "@/components/icons";
 
@@ -62,6 +63,13 @@ export function Composer({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [sending, setSending] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordedSeconds, setRecordedSeconds] = useState(0);
+
+  const recorder = useRef<MediaRecorder | null>(null);
+  const recorderChunks = useRef<Blob[]>([]);
+  const recordTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordCancelled = useRef(false);
 
   const textarea = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
@@ -85,8 +93,78 @@ export function Composer({
   useEffect(() => {
     return () => {
       if (typingTimer.current) clearTimeout(typingTimer.current);
+      if (recordTimer.current) clearInterval(recordTimer.current);
+      recorder.current?.stream.getTracks().forEach((track) => track.stop());
     };
   }, []);
+
+  // --- voice messages -----------------------------------------------------
+  function pickAudioMimeType(): string {
+    // Safari and Chrome disagree about what MediaRecorder can produce, so ask
+    // rather than assume; the server allowlist accepts all of these.
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+  }
+
+  async function startRecording() {
+    if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      toast("Voice messages are not supported in this browser", "error");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = pickAudioMimeType();
+      const media = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recorderChunks.current = [];
+      recordCancelled.current = false;
+
+      media.ondataavailable = (event) => {
+        if (event.data.size > 0) recorderChunks.current.push(event.data);
+      };
+      media.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        if (recordTimer.current) clearInterval(recordTimer.current);
+        setRecording(false);
+
+        const blob = new Blob(recorderChunks.current, {
+          type: media.mimeType || "audio/webm",
+        });
+        setRecordedSeconds(0);
+        if (recordCancelled.current || blob.size < 1200) return;
+
+        const extension = blob.type.includes("mp4") ? "m4a" : "webm";
+        const file = new File([blob], `voice-message.${extension}`, { type: blob.type });
+        setStaged((current) => [
+          ...current,
+          { id: crypto.randomUUID(), file, preview: null, uploading: false },
+        ]);
+      };
+
+      media.start();
+      recorder.current = media;
+      setRecording(true);
+      setRecordedSeconds(0);
+      recordTimer.current = setInterval(() => {
+        setRecordedSeconds((value) => {
+          // Hard cap so a forgotten recording cannot grow unbounded.
+          if (value >= 300) stopRecording();
+          return value + 1;
+        });
+      }, 1000);
+    } catch {
+      toast("Microphone permission denied", "error");
+    }
+  }
+
+  function stopRecording() {
+    recorder.current?.stop();
+    recorder.current = null;
+  }
+
+  function cancelRecording() {
+    recordCancelled.current = true;
+    stopRecording();
+  }
 
   function stageFiles(files: FileList | File[] | null) {
     if (!files) return;
@@ -267,6 +345,31 @@ export function Composer({
         </div>
       )}
 
+      {recording ? (
+        <div className="flex items-center gap-3 px-1 py-1.5">
+          <span className="flex h-3 w-3 shrink-0 items-center justify-center">
+            <span className="h-3 w-3 animate-pulse rounded-full bg-sig-danger" />
+          </span>
+          <span className="text-[14px] tabular-nums text-sig-text">
+            {Math.floor(recordedSeconds / 60)}:
+            {String(recordedSeconds % 60).padStart(2, "0")}
+          </span>
+          <span className="flex-1 text-[13px] text-sig-text-2">Recording…</span>
+          <button
+            onClick={cancelRecording}
+            className="focus-ring rounded-full px-3 py-1.5 text-[13.5px] text-sig-text-2 transition-colors hover:bg-sig-hover"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={stopRecording}
+            aria-label="Stop recording"
+            className="focus-ring flex h-9 w-9 items-center justify-center rounded-full bg-ultramarine text-white transition-colors hover:bg-ultramarine-hover"
+          >
+            <StopIcon size={16} />
+          </button>
+        </div>
+      ) : (
       <div className="flex items-end gap-2">
         <button
           onClick={() => filePicker.current?.click()}
@@ -354,7 +457,7 @@ export function Composer({
           </button>
         ) : (
           <button
-            onClick={() => toast("Voice messages are coming soon")}
+            onClick={() => void startRecording()}
             aria-label="Record voice message"
             title="Record voice message"
             disabled={sending}
@@ -364,6 +467,7 @@ export function Composer({
           </button>
         )}
       </div>
+      )}
     </div>
   );
 }

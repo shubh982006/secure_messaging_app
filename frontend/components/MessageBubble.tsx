@@ -6,6 +6,8 @@ import { timeOfDay } from "@/lib/format";
 import type { Attachment, Message } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { MessageAttachments } from "@/components/Attachments";
+import { LinkPreviewCard, LinkifiedText, firstUrl } from "@/components/LinkPreviewCard";
+import { VoiceMessage } from "@/components/VoiceMessage";
 import {
   CopyIcon,
   EmojiIcon,
@@ -90,6 +92,21 @@ function MessageBubbleBase({
       ? "rounded-bl-[18px]"
       : "rounded-bl-[5px]";
 
+  // A voice note is an audio attachment with no caption - rendered as a player
+  // rather than a file chip.
+  const voiceNote =
+    !deleted &&
+    !message.content &&
+    message.attachments.length === 1 &&
+    (message.attachments[0].mime_type ?? "").startsWith("audio/")
+      ? message.attachments[0]
+      : null;
+
+  const previewUrl =
+    !deleted && !voiceNote && message.attachments.length === 0
+      ? firstUrl(message.content)
+      : null;
+
   const grouped = message.reactions.reduce<Record<string, string[]>>((acc, reaction) => {
     (acc[reaction.emoji] ??= []).push(reaction.user_id);
     return acc;
@@ -168,7 +185,11 @@ function MessageBubbleBase({
             </button>
           )}
 
-          {!deleted && message.attachments.length > 0 && (
+          {voiceNote && <VoiceMessage attachment={voiceNote} outgoing={outgoing} />}
+
+          {previewUrl && <LinkPreviewCard url={previewUrl} outgoing={outgoing} />}
+
+          {!deleted && !voiceNote && message.attachments.length > 0 && (
             <MessageAttachments
               attachments={message.attachments}
               outgoing={outgoing}
@@ -182,7 +203,11 @@ function MessageBubbleBase({
                 deleted ? "italic opacity-70" : ""
               }`}
             >
-              {deleted ? "This message was deleted" : message.content}
+              {deleted ? (
+                "This message was deleted"
+              ) : (
+                <LinkifiedText text={message.content ?? ""} outgoing={outgoing} />
+              )}
               {/* Reserve space so the timestamp never overlaps the last word. */}
               <span className="pointer-events-none inline-block w-[62px] select-none" />
             </p>

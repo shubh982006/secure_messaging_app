@@ -1,13 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { api } from "@/lib/api";
+import { listTimestamp } from "@/lib/format";
 import { useStore } from "@/lib/store";
-import type { Conversation } from "@/lib/types";
+import type { Conversation, MessageSearchHit } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { ConversationRow } from "@/components/ConversationRow";
-import { ComposeIcon, SearchIcon, CloseIcon, SignalLogo } from "@/components/icons";
+import { CloseIcon, ComposeIcon, SearchIcon, SignalLogo } from "@/components/icons";
 
 /**
  * Signal's left pane: your avatar + compose button, a search field, then the
@@ -31,6 +33,38 @@ export function ConversationList({
   const setSearch = useStore((state) => state.setSearch);
 
   const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [hits, setHits] = useState<MessageSearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  // Full-text search across every conversation, debounced so a fast typist
+  // does not fire a query per keystroke.
+  useEffect(() => {
+    const term = search.trim();
+    if (term.length < 2) {
+      setHits([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      api
+        .searchMessages(term)
+        .then((response) => {
+          if (!cancelled) setHits(response.results);
+        })
+        .catch(() => {
+          if (!cancelled) setHits([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [search]);
 
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -133,43 +167,147 @@ export function ConversationList({
       </header>
 
       <div className="sig-scroll flex-1 overflow-y-auto pb-4 pt-1">
-        {visible.length === 0 ? (
-          <EmptyList search={search} filter={filter} onNewChat={onNewChat} />
+        {visible.length === 0 && hits.length === 0 ? (
+          <EmptyList
+            search={search}
+            filter={filter}
+            searching={searching}
+            onNewChat={onNewChat}
+          />
         ) : (
-          visible.map((conversation: Conversation) => (
-            <ConversationRow
-              key={conversation.id}
-              conversation={conversation}
-              active={conversation.id === activeId}
-              meId={me?.id ?? ""}
-              typingNames={(typing[conversation.id] ?? []).map((entry) => entry.name)}
-              onSelect={() => router.push(`/chats/${conversation.id}`)}
-            />
-          ))
+          <>
+            {visible.length > 0 && (
+              <>
+                {search.trim().length >= 2 && (
+                  <SectionLabel>Chats</SectionLabel>
+                )}
+                {visible.map((conversation: Conversation) => (
+                  <ConversationRow
+                    key={conversation.id}
+                    conversation={conversation}
+                    active={conversation.id === activeId}
+                    meId={me?.id ?? ""}
+                    typingNames={(typing[conversation.id] ?? []).map((entry) => entry.name)}
+                    onSelect={() => router.push(`/chats/${conversation.id}`)}
+                  />
+                ))}
+              </>
+            )}
+
+            {hits.length > 0 && (
+              <>
+                <SectionLabel>
+                  Messages{searching ? "" : ` · ${hits.length}`}
+                </SectionLabel>
+                {hits.map((hit) => (
+                  <SearchHitRow
+                    key={hit.message.id}
+                    hit={hit}
+                    term={search.trim()}
+                    onSelect={() => {
+                      router.push(`/chats/${hit.conversation_id}`);
+                      // Give the thread a moment to mount before scrolling.
+                      setTimeout(() => {
+                        document
+                          .getElementById(`message-${hit.message.id}`)
+                          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      }, 400);
+                    }}
+                  />
+                ))}
+              </>
+            )}
+          </>
         )}
       </div>
     </aside>
   );
 }
 
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="px-4 pb-1 pt-3 text-[11.5px] font-medium uppercase tracking-wider text-sig-text-3">
+      {children}
+    </p>
+  );
+}
+
+/** One full-text search result: which chat it came from, plus the excerpt. */
+function SearchHitRow({
+  hit,
+  term,
+  onSelect,
+}: {
+  hit: MessageSearchHit;
+  term: string;
+  onSelect: () => void;
+}) {
+  const pieces = hit.snippet.split(new RegExp(`(${escapeRegExp(term)})`, "ig"));
+  return (
+    <button
+      onClick={onSelect}
+      className="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-sig-hover"
+    >
+      <Avatar
+        name={hit.conversation_name}
+        seed={hit.conversation_id}
+        size={40}
+        isGroup={hit.conversation_type === "group"}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-[14.5px] font-medium text-sig-text">
+            {hit.conversation_name ?? "Unknown"}
+          </span>
+          <span className="shrink-0 text-[11.5px] text-sig-text-3">
+            {listTimestamp(hit.message.created_at)}
+          </span>
+        </span>
+        <span className="mt-0.5 line-clamp-2 block text-[13.5px] text-sig-text-2">
+          {pieces.map((piece, index) =>
+            piece.toLowerCase() === term.toLowerCase() ? (
+              <mark
+                key={index}
+                className="rounded bg-transparent font-semibold text-ultramarine-light"
+              >
+                {piece}
+              </mark>
+            ) : (
+              <span key={index}>{piece}</span>
+            ),
+          )}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function EmptyList({
   search,
   filter,
+  searching,
   onNewChat,
 }: {
   search: string;
   filter: "all" | "unread";
+  searching: boolean;
   onNewChat: () => void;
 }) {
   return (
     <div className="flex flex-col items-center px-8 py-14 text-center">
       <SignalLogo size={34} className="mb-3 text-sig-text-3" />
       <p className="text-[14px] text-sig-text-2">
-        {search
-          ? `No chats matching “${search}”`
-          : filter === "unread"
-            ? "You're all caught up"
-            : "No chats yet"}
+        {searching
+          ? "Searching…"
+          : search
+            ? `Nothing matching “${search}”`
+            : filter === "unread"
+              ? "You're all caught up"
+              : "No chats yet"}
       </p>
       {!search && filter === "all" && (
         <button

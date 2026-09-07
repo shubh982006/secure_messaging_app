@@ -171,6 +171,18 @@ body {
   animation: sig-typing 1.25s infinite ease-in-out;
 }
 
+/* Message list virtualization, done by the browser.
+   `content-visibility: auto` lets the engine skip layout, style and paint for
+   rows outside the viewport, and `contain-intrinsic-size` gives it a size to
+   assume for skipped rows so the scrollbar stays stable. This buys most of the
+   win of a windowing library with none of the scroll-anchoring bugs - the
+   existing autoscroll and load-older logic keeps working untouched, because
+   every row is still a real DOM node the browser can scroll to. */
+.message-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+
 textarea {
   field-sizing: content;
 }
