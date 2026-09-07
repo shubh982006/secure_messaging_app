@@ -18,6 +18,14 @@ export interface Me extends User {
   created_at: string | null;
 }
 
+export interface Contact {
+  id: string;
+  user: User;
+  /** A locally chosen name that overrides the peer's own display_name. */
+  nickname: string | null;
+  created_at: string;
+}
+
 export interface Member {
   user_id: string;
   display_name: string | null;

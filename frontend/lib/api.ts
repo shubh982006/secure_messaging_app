@@ -1,6 +1,7 @@
 import type {
   Attachment,
   ApiErrorBody,
+  Contact,
   Conversation,
   LinkPreview,
   Me,
@@ -179,6 +180,20 @@ export const api = {
 
   searchUsers: (q: string) =>
     request<{ results: User[] }>(`/users/search?q=${encodeURIComponent(q)}`),
+
+  // --- contacts -----------------------------------------------------------
+  contacts: () => request<{ contacts: Contact[] }>("/contacts"),
+
+  /** Identify the peer by exactly one of phone_number, username or user_id. */
+  addContact: (body: {
+    phone_number?: string;
+    username?: string;
+    user_id?: string;
+    nickname?: string | null;
+  }) => request<Contact>("/contacts", { method: "POST", body }),
+
+  deleteContact: (id: string) =>
+    request<void>(`/contacts/${id}`, { method: "DELETE" }),
 
   // --- conversations ------------------------------------------------------
   conversations: (before?: string) =>

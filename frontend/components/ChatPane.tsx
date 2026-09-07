@@ -11,6 +11,7 @@ import { Avatar } from "@/components/Avatar";
 import { Lightbox } from "@/components/Attachments";
 import { Composer } from "@/components/Composer";
 import { MessageBubble } from "@/components/MessageBubble";
+import { ForwardModal } from "@/components/modals/ForwardModal";
 import {
   BackIcon,
   BellIcon,
@@ -47,6 +48,7 @@ export function ChatPane({ conversation, onOpenInfo }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [threadSearch, setThreadSearch] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Attachment | null>(null);
+  const [forwarding, setForwarding] = useState<Message | null>(null);
   const [droppedFiles, setDroppedFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
 
@@ -114,13 +116,14 @@ export function ChatPane({ conversation, onOpenInfo }: Props) {
       }
       if (event.key === "Escape") {
         if (lightbox) return; // the lightbox closes itself
+        if (forwarding) return; // so does the forward sheet
         if (threadSearch !== null) setThreadSearch(null);
         else if (replyTo) setReplyTo(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [lightbox, threadSearch, replyTo]);
+  }, [lightbox, forwarding, threadSearch, replyTo]);
 
   const onScroll = useCallback(() => {
     const element = scroller.current;
@@ -391,6 +394,7 @@ export function ChatPane({ conversation, onOpenInfo }: Props) {
                 endsGroup={endsGroup}
                 meId={me?.id ?? ""}
                 onReply={setReplyTo}
+                onForward={setForwarding}
                 onDelete={(target) => void deleteMessage(target.id, conversation.id)}
                 onReact={(target, emoji) =>
                   void toggleReaction(target.id, conversation.id, emoji)
@@ -411,6 +415,7 @@ export function ChatPane({ conversation, onOpenInfo }: Props) {
       </div>
 
       <Lightbox attachment={lightbox} onClose={() => setLightbox(null)} />
+      <ForwardModal message={forwarding} onClose={() => setForwarding(null)} />
 
       <Composer
         conversationId={conversation.id}

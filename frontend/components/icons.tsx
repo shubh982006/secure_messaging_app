@@ -423,3 +423,22 @@ export function LinkIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** ReplyIcon mirrored - forwarding is a reply pointing the other way. */
+export function ForwardIcon(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M15 17l5-5-5-5" />
+      <path d="M20 12H9a5 5 0 0 0-5 5v2" />
+    </svg>
+  );
+}
+
+/** WhatsApp's bubble affordance: a chevron that reveals the message menu. */
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}

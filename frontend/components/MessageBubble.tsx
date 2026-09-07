@@ -1,6 +1,8 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 
 import { timeOfDay } from "@/lib/format";
 import type { Attachment, Message } from "@/lib/types";
@@ -9,9 +11,10 @@ import { MessageAttachments } from "@/components/Attachments";
 import { LinkPreviewCard, LinkifiedText, firstUrl } from "@/components/LinkPreviewCard";
 import { VoiceMessage } from "@/components/VoiceMessage";
 import {
+  ChevronDownIcon,
   CopyIcon,
   EmojiIcon,
-  KebabIcon,
+  ForwardIcon,
   ReplyIcon,
   StatusTick,
   TimerIcon,
@@ -19,6 +22,23 @@ import {
 } from "@/components/icons";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+/** Revealed by the "+" on the quick bar, the way WhatsApp expands to a grid. */
+const MORE_REACTIONS = [
+  "😀", "😅", "🥹", "😍", "😘", "🤗", "🤔", "😐",
+  "🙄", "😴", "😭", "😤", "😡", "🥳", "🤯", "😎",
+  "👏", "🙌", "💪", "🔥", "✅", "💯", "🎉", "👀",
+];
+
+type Anchor = { left: number; top: number; flipX: boolean; flipY: boolean };
+
+/** Room a popover needs on a side before it will open toward it. */
+const POPOVER_CLEARANCE_PX = 240;
+
+/** How long a touch must rest on a bubble before the reaction bar opens. */
+const LONG_PRESS_MS = 450;
+/** Past this much finger travel the gesture is a scroll, not a press. */
+const LONG_PRESS_SLOP_PX = 10;
 
 export interface BubbleProps {
   message: Message;
@@ -32,6 +52,7 @@ export interface BubbleProps {
   endsGroup: boolean;
   meId: string;
   onReply: (message: Message) => void;
+  onForward: (message: Message) => void;
   onDelete: (message: Message) => void;
   onReact: (message: Message, emoji: string) => void;
   onCopy: (text: string) => void;
@@ -48,6 +69,7 @@ function MessageBubbleBase({
   endsGroup,
   meId,
   onReply,
+  onForward,
   onDelete,
   onReact,
   onCopy,
@@ -55,18 +77,128 @@ function MessageBubbleBase({
 }: BubbleProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [reactionsOpen, setReactionsOpen] = useState(false);
+  const [pickerExpanded, setPickerExpanded] = useState(false);
   const wrapper = useRef<HTMLDivElement>(null);
+  const bubble = useRef<HTMLDivElement>(null);
+  const chevron = useRef<HTMLButtonElement>(null);
+  // Portalled popovers live outside `wrapper`, so the outside-click check has
+  // to know about them or the first click inside would dismiss them.
+  const menuBox = useRef<HTMLDivElement>(null);
+  const pickerBox = useRef<HTMLDivElement>(null);
+  const [menuAnchor, setMenuAnchor] = useState<Anchor | null>(null);
+  const [pickerAnchor, setPickerAnchor] = useState<Anchor | null>(null);
+  const pressTimer = useRef<number | null>(null);
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
+
+  function cancelPress() {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    pressOrigin.current = null;
+  }
+
+  /** Long-press is the touch equivalent of the hover toolbar's React button. */
+  function beginPress(event: ReactPointerEvent) {
+    if (event.pointerType !== "touch") return;
+    cancelPress();
+    pressOrigin.current = { x: event.clientX, y: event.clientY };
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      openPicker();
+      // Otherwise the browser starts selecting the message text underneath.
+      window.getSelection?.()?.removeAllRanges();
+    }, LONG_PRESS_MS);
+  }
+
+  /** A finger that travels is scrolling the thread, so abandon the press. */
+  function trackPress(event: ReactPointerEvent) {
+    const origin = pressOrigin.current;
+    if (!origin) return;
+    if (
+      Math.abs(event.clientX - origin.x) > LONG_PRESS_SLOP_PX ||
+      Math.abs(event.clientY - origin.y) > LONG_PRESS_SLOP_PX
+    ) {
+      cancelPress();
+    }
+  }
+
+  /**
+   * The thread scroller is `overflow-y: auto`, so it clips any absolutely
+   * positioned descendant that leaves its box - which is why the menu showed
+   * up as a sliver under the last bubble. Both popovers are portalled to
+   * <body> and placed from their anchor's viewport rect instead.
+   *
+   * Placement uses translate rather than a measured width so it stays correct
+   * as the picker grows: `left` is the edge to align to, and the flips pull the
+   * box back over it. The transform lives on an outer wrapper because
+   * `animate-pop` animates `transform: scale()` and would otherwise clobber it.
+   */
+  function anchorTo(element: HTMLElement | null, preferAbove: boolean, gap: number) {
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    const roomAbove = rect.top > POPOVER_CLEARANCE_PX;
+    const roomBelow = window.innerHeight - rect.bottom > POPOVER_CLEARANCE_PX;
+    const above = preferAbove ? roomAbove : !roomBelow && roomAbove;
+    return {
+      left: outgoing ? rect.right : rect.left,
+      top: above ? rect.top - gap : rect.bottom + gap,
+      flipX: outgoing,
+      flipY: above,
+    };
+  }
+
+  function openMenu() {
+    setReactionsOpen(false);
+    setMenuAnchor(anchorTo(chevron.current, false, 4));
+    setMenuOpen(true);
+  }
+
+  function openPicker() {
+    setMenuOpen(false);
+    setPickerExpanded(false);
+    setPickerAnchor(anchorTo(bubble.current, true, 8));
+    setReactionsOpen(true);
+  }
+
+  function react(emoji: string) {
+    onReact(message, emoji);
+    setReactionsOpen(false);
+    setPickerExpanded(false);
+  }
+
+  // A bubble that unmounts mid-press must not fire its timer.
+  useEffect(() => cancelPress, []);
 
   useEffect(() => {
     if (!menuOpen && !reactionsOpen) return;
     const onDown = (event: MouseEvent) => {
-      if (!wrapper.current?.contains(event.target as Node)) {
-        setMenuOpen(false);
-        setReactionsOpen(false);
+      const target = event.target as Node;
+      if (
+        wrapper.current?.contains(target) ||
+        menuBox.current?.contains(target) ||
+        pickerBox.current?.contains(target)
+      ) {
+        return;
       }
+      setMenuOpen(false);
+      setReactionsOpen(false);
+      setPickerExpanded(false);
+    };
+    // A fixed popover cannot follow its anchor, so scrolling dismisses it.
+    const onReflow = () => {
+      setMenuOpen(false);
+      setReactionsOpen(false);
+      setPickerExpanded(false);
     };
     window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onReflow, true);
+    window.addEventListener("resize", onReflow);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", onReflow, true);
+      window.removeEventListener("resize", onReflow);
+    };
   }, [menuOpen, reactionsOpen]);
 
   // --- system message: a centred grey line, like Signal's group events ------
@@ -134,12 +266,26 @@ function MessageBubbleBase({
         }`}
       >
         <div
+          ref={bubble}
           className={`relative rounded-[18px] px-3 py-[7px] ${corner} ${
             outgoing ? "text-white" : "text-sig-text"
           }`}
           style={{
             background: outgoing ? "var(--sig-bubble-out)" : "var(--sig-bubble-in)",
           }}
+          onContextMenu={
+            deleted
+              ? undefined
+              : (event) => {
+                  event.preventDefault();
+                  openPicker();
+                }
+          }
+          onPointerDown={deleted ? undefined : beginPress}
+          onPointerMove={deleted ? undefined : trackPress}
+          onPointerUp={cancelPress}
+          onPointerCancel={cancelPress}
+          onPointerLeave={cancelPress}
         >
           {/* Sender name on the first message of a run, in that person's colour. */}
           {!outgoing && isGroup && startsGroup && (
@@ -218,6 +364,101 @@ function MessageBubbleBase({
             <span className="block h-[15px]" />
           )}
 
+          {/* WhatsApp's hover chevron. It fades into the bubble so it never
+              sits on bare text, and it is the only entry point to the menu. */}
+          {!deleted && (
+            <button
+              ref={chevron}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (menuOpen) setMenuOpen(false);
+                else openMenu();
+              }}
+              aria-label="Message options"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              className={`absolute right-0 top-0 flex h-[26px] w-9 items-center justify-end rounded-tr-[18px] pr-1.5 transition-opacity ${
+                outgoing ? "text-white/85" : "text-sig-text-2"
+              } ${
+                menuOpen
+                  ? "opacity-100"
+                  : "opacity-0 focus-visible:opacity-100 group-hover/message:opacity-100"
+              }`}
+              style={{
+                background: `linear-gradient(to left, ${
+                  outgoing ? "var(--sig-bubble-out)" : "var(--sig-bubble-in)"
+                } 60%, transparent)`,
+              }}
+            >
+              <ChevronDownIcon size={16} strokeWidth={2.4} />
+            </button>
+          )}
+
+          {menuOpen &&
+            menuAnchor &&
+            createPortal(
+              <div
+                ref={menuBox}
+                style={{
+                  position: "fixed",
+                  left: menuAnchor.left,
+                  top: menuAnchor.top,
+                  transform: `${menuAnchor.flipX ? "translateX(-100%)" : ""} ${menuAnchor.flipY ? "translateY(-100%)" : ""}`,
+                  zIndex: 60,
+                }}
+              >
+                <div
+                  role="menu"
+                  className="animate-pop w-44 overflow-hidden rounded-lg border py-1 text-sig-text"
+                  style={{
+                    background: "var(--sig-elevated)",
+                    borderColor: "var(--sig-border)",
+                    boxShadow: "var(--sig-shadow)",
+                  }}
+                >
+          <MenuItem icon={<EmojiIcon size={15} />} label="React" onClick={openPicker} />
+          <MenuItem
+            icon={<ReplyIcon size={15} />}
+            label="Reply"
+            onClick={() => {
+              onReply(message);
+              setMenuOpen(false);
+            }}
+          />
+          <MenuItem
+            icon={<ForwardIcon size={15} />}
+            label="Forward"
+            onClick={() => {
+              onForward(message);
+              setMenuOpen(false);
+            }}
+          />
+          {(message.content ?? "").trim() !== "" && (
+            <MenuItem
+              icon={<CopyIcon size={15} />}
+              label="Copy text"
+              onClick={() => {
+                onCopy(message.content ?? "");
+                setMenuOpen(false);
+              }}
+            />
+          )}
+          {outgoing && (
+            <MenuItem
+              icon={<TrashIcon size={15} />}
+              label="Delete"
+              danger
+              onClick={() => {
+                onDelete(message);
+                setMenuOpen(false);
+              }}
+            />
+          )}
+                </div>
+              </div>,
+              document.body,
+            )}
+
           <span
             className={`absolute bottom-[6px] right-3 flex select-none items-center gap-1 text-[11px] ${
               outgoing ? "text-white/70" : "text-sig-text-3"
@@ -276,115 +517,86 @@ function MessageBubbleBase({
         )}
       </div>
 
-      {/* Hover toolbar - Signal reveals these on the side of the bubble. */}
-      {!deleted && (
-        <div
-          className={`absolute top-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/message:opacity-100 ${
-            outgoing ? "right-full mr-1" : "left-full ml-1"
-          }`}
-        >
-          <IconAction label="React" onClick={() => setReactionsOpen((open) => !open)}>
-            <EmojiIcon size={16} />
-          </IconAction>
-          <IconAction label="Reply" onClick={() => onReply(message)}>
-            <ReplyIcon size={16} />
-          </IconAction>
-          <IconAction label="More" onClick={() => setMenuOpen((open) => !open)}>
-            <KebabIcon size={16} />
-          </IconAction>
-        </div>
-      )}
-
-      {reactionsOpen && (
-        <div
-          className={`animate-pop absolute -top-9 z-20 flex gap-1 rounded-full border px-2 py-1.5 ${
-            outgoing ? "right-4" : "left-4"
-          }`}
-          style={{
-            background: "var(--sig-elevated)",
-            borderColor: "var(--sig-border)",
-            boxShadow: "var(--sig-shadow)",
-          }}
-        >
-          {QUICK_REACTIONS.map((emoji) => (
+      {reactionsOpen &&
+        pickerAnchor &&
+        createPortal(
+          <div
+            ref={pickerBox}
+            style={{
+              position: "fixed",
+              left: pickerAnchor.left,
+              top: pickerAnchor.top,
+              transform: `${pickerAnchor.flipX ? "translateX(-100%)" : ""} ${pickerAnchor.flipY ? "translateY(-100%)" : ""}`,
+              zIndex: 60,
+            }}
+          >
+            <div className="animate-pop" role="menu" aria-label="React to message">
+          <div
+            className={`flex gap-1 rounded-full border px-2 py-1.5 ${
+              pickerExpanded ? "rounded-b-none" : ""
+            }`}
+            style={{
+              background: "var(--sig-elevated)",
+              borderColor: "var(--sig-border)",
+              boxShadow: "var(--sig-shadow)",
+            }}
+          >
+            {QUICK_REACTIONS.map((emoji) => {
+              const mine = grouped[emoji]?.includes(meId);
+              return (
+                <button
+                  key={emoji}
+                  onClick={() => react(emoji)}
+                  aria-pressed={mine}
+                  title={mine ? "Remove your reaction" : `React ${emoji}`}
+                  className={`rounded-full px-1 text-[18px] transition-transform hover:scale-125 ${
+                    mine ? "bg-sig-active scale-110" : ""
+                  }`}
+                >
+                  {emoji}
+                </button>
+              );
+            })}
             <button
-              key={emoji}
-              onClick={() => {
-                onReact(message, emoji);
-                setReactionsOpen(false);
-              }}
-              className="rounded-full px-1 text-[18px] transition-transform hover:scale-125"
+              onClick={() => setPickerExpanded((open) => !open)}
+              aria-expanded={pickerExpanded}
+              title={pickerExpanded ? "Fewer emoji" : "More emoji"}
+              className="ml-0.5 flex h-6 w-6 items-center justify-center self-center rounded-full text-[15px] leading-none text-sig-text-2 transition-colors hover:bg-sig-hover hover:text-sig-text"
+              style={{ background: "var(--sig-hover)" }}
             >
-              {emoji}
+              {pickerExpanded ? "−" : "+"}
             </button>
-          ))}
-        </div>
-      )}
+          </div>
 
-      {menuOpen && (
-        <div
-          className={`animate-pop absolute top-8 z-20 w-40 overflow-hidden rounded-lg border py-1 ${
-            outgoing ? "right-8" : "left-8"
-          }`}
-          style={{
-            background: "var(--sig-elevated)",
-            borderColor: "var(--sig-border)",
-            boxShadow: "var(--sig-shadow)",
-          }}
-        >
-          <MenuItem
-            icon={<ReplyIcon size={15} />}
-            label="Reply"
-            onClick={() => {
-              onReply(message);
-              setMenuOpen(false);
-            }}
-          />
-          <MenuItem
-            icon={<CopyIcon size={15} />}
-            label="Copy text"
-            onClick={() => {
-              onCopy(message.content ?? "");
-              setMenuOpen(false);
-            }}
-          />
-          {outgoing && (
-            <MenuItem
-              icon={<TrashIcon size={15} />}
-              label="Delete"
-              danger
-              onClick={() => {
-                onDelete(message);
-                setMenuOpen(false);
+          {pickerExpanded && (
+            <div
+              className="grid w-[248px] grid-cols-8 gap-0.5 rounded-b-2xl border border-t-0 p-2"
+              style={{
+                background: "var(--sig-elevated)",
+                borderColor: "var(--sig-border)",
+                boxShadow: "var(--sig-shadow)",
               }}
-            />
+            >
+              {MORE_REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  onClick={() => react(emoji)}
+                  title={`React ${emoji}`}
+                  className="rounded-md py-0.5 text-[17px] transition-transform hover:scale-125"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
           )}
-        </div>
-      )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
 
-function IconAction({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className="focus-ring flex h-7 w-7 items-center justify-center rounded-full text-sig-text-3 transition-colors hover:bg-sig-hover hover:text-sig-text"
-    >
-      {children}
-    </button>
-  );
-}
 
 function MenuItem({
   icon,
