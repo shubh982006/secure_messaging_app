@@ -254,6 +254,33 @@ O(messages × members) explosion that §8 avoids for receipts.
 
 ---
 
+## 7c. Full-text search
+
+Search spans every conversation a user belongs to, and uses a real inverted index on both engines
+rather than a `LIKE` scan — so cost scales with the number of *matches*, not the number of messages.
+
+| Engine | Index | Query |
+|---|---|---|
+| SQLite | FTS5 external-content virtual table, kept in sync by insert/update/delete triggers | `MATCH` with a prefix on the final token |
+| Postgres | GIN over `to_tsvector('english', content)` | `to_tsquery` with `:*` on the final token |
+
+Three details that matter:
+
+- **`to_tsquery`, not `plainto_tsquery`.** The latter has no prefix matching, so "coff" would miss
+  "coffee" and the two engines would behave differently as you type. Tokens are stripped to
+  alphanumerics before interpolation because `to_tsquery` raises on malformed syntax.
+- **FTS5 operators are escaped.** A user typing `"`, `c++` or `-x` must search, not produce a syntax
+  error — asserted directly in the tests.
+- **The membership scope lives inside the query**, not in a post-filter, so search cannot leak a
+  message from a conversation the caller cannot open. Asserted in the API suite and again in the
+  browser suite.
+
+The same DDL is applied both by the migration and on the `create_all` path, because an FTS5 virtual
+table plus triggers is not something SQLAlchemy metadata can express — without that, search would
+work in production and silently degrade to nothing in tests.
+
+---
+
 ## 8. Read receipts — high-water marks (the scalability decision)
 
 A naive design writes one `receipt(message_id, user_id, status)` row per message per member — that
@@ -280,8 +307,13 @@ same trade, and it is the right one for group scale.
 
 The whole design hinges on one seam: **`ConnectionManager.send_to_users()`**.
 
-**Now:** an in-process dict. Sender and recipient are on the same process, so delivery is a direct
-`websocket.send_json()`.
+> **Status: built and verified.** `app/ws/redis_manager.py` is the multi-node
+> implementation, and `scripts/multinode_check.py` proves it with 21 assertions
+> against two real uvicorn processes. What follows describes working code, not a
+> plan.
+
+**Single node:** an in-process dict. Sender and recipient are on the same process, so delivery is a
+direct `websocket.send_json()`. No Redis is involved, or required.
 
 **The problem at 2+ nodes:** User A is connected to Node 1, User B to Node 2. Node 1 holds no socket
 for B.
@@ -295,17 +327,52 @@ flowchart LR
     N2 -- websocket.send --> B
 ```
 
-- Each node subscribes to a channel per user it currently holds (`user:{id}`).
-- `send_to_users()` delivers to local sockets first, then `PUBLISH`es for the remainder.
+- Each node subscribes to a channel per user it currently holds (`ws:user:{id}`).
+- `send_to_users()` delivers to local sockets first, then `PUBLISH`es for the remainder. Publishing
+  to a channel nobody holds is a harmless no-op, so no membership lookup is needed.
 - The owning node receives the message and pushes it down the live socket.
 - `InMemoryConnectionManager` is swapped for `RedisConnectionManager` behind the same
-  `BaseConnectionManager` interface — **no service-layer changes.** The abstract base class exists
-  in the code today for exactly this reason.
+  `BaseConnectionManager` interface — **no service-layer changes.** Setting `REDIS_URL` is the
+  entire difference; `configure_manager()` picks the implementation at startup.
+
+**The part that is not obvious: presence.**
+
+`is_online()` is called synchronously throughout the serializers, on the render path for every
+conversation row and every member. Making it `await` would have meant rewriting the render path, so
+instead **each node keeps an in-memory mirror of the global online set**, kept correct two ways:
+
+- **pub/sub deltas** on a shared `ws:presence` channel, so a user coming online elsewhere is
+  reflected in milliseconds;
+- **periodic reconciliation** against Redis, which is what makes it *correct* rather than merely
+  fast — it is how a node recovers from a dropped message and how users stranded by a dead node get
+  reaped.
+
+Liveness is a per-node key (`presence:node:{id}`) carrying that node's users, with a TTL refreshed
+by heartbeat. A node that shuts down gracefully deletes its key and publishes offline deltas, so it
+disappears instantly. A node that is `SIGKILL`ed cannot do either — it is detected purely by its key
+expiring, measured at **~15 s**, tunable via `NODE_TTL_SECONDS` / `RECONCILE_SECONDS`.
+
+**Two bugs this design produced, both worth knowing about:**
+
+- `redis-py`'s `PubSub` multiplexes a single connection and is **not safe to use from two tasks at
+  once**. `subscribe()` runs on the request path while the listener polls `get_message()`; without a
+  lock around every touch of the PubSub object, a subscribe racing a poll silently drops presence
+  deltas. Found by a node reporting stale presence counts under load.
+- A node originally registered itself in the node registry only on its *first heartbeat*, ten
+  seconds in. A reconcile before that saw an empty registry and wiped every peer's users out of the
+  mirror. Nodes now register during startup, before the first reconcile.
+
+**Measured** (`scripts/multinode_check.py`, two processes on one machine): cross-node delivery
+**52 ms**; a token minted on node A is accepted by node B (stateless JWT is what makes the app tier
+horizontally scalable at all); receipts, typing and group fan-out all cross correctly.
 
 **Other scale levers, in priority order**
 
-1. **SQLite → Postgres.** URL plus Alembic migration. Removes the single-writer bottleneck and adds
-   real connection pooling. Nothing in the domain code knows which engine it is on.
+1. **SQLite → Postgres.** URL plus Alembic migration — **verified, not assumed**: the same
+   migrations apply cleanly, the full 87-test suite runs against both engines (`TEST_DATABASE_URL`),
+   and the 67-check e2e suite passes against Postgres with zero code changes. Measured at +57%
+   throughput and −41% p99 under identical load, which is the concrete form of "the single writer is
+   the first thing to break".
 2. **Offline delivery / reconnect sync.** Already built: messages persist before fan-out, and a
    reconnecting client calls `?after=<last_seen_seq>` rather than replaying socket events. The DB is
    the source of truth; the socket is the fast path.
@@ -318,6 +385,28 @@ flowchart LR
    from a per-conversation counter to Snowflake/ULID to stay ordered without a shared counter.
 6. **WebSocket sharding.** A dedicated gateway tier (sticky by `user_id`) separate from the API
    tier, so socket fan-out and request/response scale on independent curves.
+
+**What load testing actually found.** Reading the code did not reveal either of these; measuring did.
+
+- The send path issued **9 sequential round trips** per message — membership, conversation and
+  member list as three separate `SELECT`s, a `refresh()` after commit for values already in hand,
+  and a user lookup for reply-author names that almost never applied. Collapsed to **4**. SQLite
+  throughput 116 → 180 msg/s, p99 7733 → 5394 ms.
+- The connection pool was SQLAlchemy's default (`pool_size=5, max_overflow=10`), capping the server
+  at **15 concurrent transactions**, with a `SELECT 1` on every checkout from `pool_pre_ping`. Under
+  a burst that queue *was* the latency.
+
+**Horizontal scaling, measured** — 200 sockets, 1000-message burst, one laptop hosting the load
+generator, Postgres, Redis and every node:
+
+| Nodes | Throughput | Server ack p99 |
+|---|---|---|
+| 1 | 328 msg/s | 2947 ms |
+| 2 | 393 msg/s | 2071 ms |
+| 3 | 489 msg/s | 1809 ms |
+
+Sub-linear, and the reason matters: everything competes for one machine's CPU and all nodes share a
+single Postgres. Ack latency falling 39% is the cleaner evidence that the app tier distributed.
 
 **Query discipline that makes the list endpoint cheap.** `GET /conversations` is **three queries
 regardless of page size**: the page of conversations, every member row for that page, and each

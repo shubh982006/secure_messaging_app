@@ -324,6 +324,53 @@ Limits: 10 MB per file (`FILE_TOO_LARGE`), and a MIME **allowlist** covering com
 audio and video types (`UNSUPPORTED_MEDIA_TYPE` otherwise). The stored filename is a random UUID —
 the client's filename is kept only as display metadata.
 
+### `GET /search/messages?q=<term>&limit=40&conversation_id=<id>`
+
+Full-text search across every conversation the caller belongs to. Backed by SQLite FTS5 or a
+Postgres GIN index depending on the engine; the membership filter is part of the query, so a result
+can never come from a conversation the caller cannot open. Queries shorter than 2 characters return
+an empty list. The final token is prefix-matched, so results narrow as the user types.
+
+```json
+{
+  "query": "pipeline",
+  "results": [
+    {
+      "message": { "...full message object as in §4..." },
+      "conversation_id": "uuid",
+      "conversation_name": "Bob Martinez",
+      "conversation_type": "direct",
+      "snippet": "…the deployment pipeline is green again…"
+    }
+  ]
+}
+```
+
+Deleted messages, system messages and expired disappearing messages are excluded.
+
+---
+
+### `GET /links/preview?url=<url>`
+
+Unfurls a link into an Open Graph card.
+
+```json
+{
+  "url": "https://example.com/",
+  "title": "Example Domain",
+  "description": null,
+  "image": null,
+  "site_name": "example.com"
+}
+```
+
+Authenticated on purpose — an open URL-fetching endpoint is a gift to anyone probing your network.
+Only `http`/`https` are accepted (`UNSUPPORTED_SCHEME`), every resolved IP is checked against
+private, loopback, link-local, reserved and multicast ranges before connecting, and redirects are
+followed manually so each hop is re-validated (`LINK_NOT_ALLOWED`). Failures are deliberately vague
+so the endpoint cannot be used to port-scan an internal network. Results are cached per node for
+30 minutes.
+
 ---
 
 ## 5. WebSocket protocol

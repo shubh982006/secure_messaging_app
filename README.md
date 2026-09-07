@@ -7,6 +7,22 @@ delivery/read receipts, typing indicators, presence, and a UI built to match Sig
 
 ---
 
+## The short version
+
+Everything below is measured on this repo, not asserted.
+
+| | |
+|---|---|
+| **Runs multi-node for real** | Two API processes + Redis Pub/Sub + Postgres, proven by `scripts/multinode_check.py` — 21 assertions that all fail if fan-out were still in-process. Cross-node delivery **52 ms**; a `SIGKILL`ed node is reaped in **~15 s**. |
+| **Scales horizontally, measured** | 200 sockets, 1000-message burst: **328 → 393 → 489 msg/s** across 1, 2 and 3 nodes; server ack p99 **2947 → 2071 → 1809 ms**. `./scripts/benchmark.sh` |
+| **Postgres proven, not promised** | The same migrations, the same 87 tests and the full 67-check e2e suite all pass against Postgres with **zero code changes**. |
+| **Load testing found real bugs** | The send path issued **9 sequential round trips** (now 4), and the connection pool capped the server at **15 concurrent transactions**. SQLite throughput 116 → 180 msg/s, p99 7.7 s → 5.4 s. |
+| **Tested** | **87** backend tests (on both engines) · **67** live-server e2e checks · **72** browser assertions driving concurrent sessions · **21** multi-node assertions. |
+
+---
+
+---
+
 ## Table of contents
 
 - [Quick start](#quick-start)
@@ -19,6 +35,8 @@ delivery/read receipts, typing indicators, presence, and a UI built to match Sig
 - [The four decisions that matter](#the-four-decisions-that-matter)
 - [Bonus features](#bonus-features)
 - [Keyboard shortcuts](#keyboard-shortcuts)
+- [Running multi-node](#running-multi-node)
+- [Benchmarks](#benchmarks)
 - [Testing](#testing)
 - [Deployment](#deployment)
 - [Assumptions and known limits](#assumptions-and-known-limits)
@@ -118,6 +136,12 @@ Alice in one and Bob in the other, and put them side by side.
 | **Bonus:** dark / light mode | Done | CSS variables, toggle in Settings or `⌘⇧D` |
 | **Bonus:** responsive (mobile / tablet / desktop) | Done | list and thread are separate screens below `md` |
 | **Bonus:** keyboard shortcuts | Done | `lib/shortcuts.ts`, help modal on `?` |
+| **Bonus:** full-text search across all chats | Done | SQLite FTS5 / Postgres GIN, `app/services/search_service.py` |
+| **Bonus:** voice messages | Done | MediaRecorder → attachment pipeline, seekable waveform player |
+| **Bonus:** link previews (Open Graph) | Done | `app/services/link_service.py`, SSRF-hardened |
+| **Bonus:** message list virtualization | Done | CSS containment, no windowing library |
+| **Scale:** multi-node Redis fan-out | Done | `app/ws/redis_manager.py` + `scripts/multinode_check.py` |
+| **Scale:** Postgres | Done | same migrations, same tests, zero code changes |
 | **Bonus:** message delete (tombstone) | Done | soft delete |
 | **Bonus:** mute per conversation | Done | per-member flag |
 | Real E2E encryption | Mocked | plaintext storage; see [Assumptions](#assumptions-and-known-limits) |
@@ -357,6 +381,56 @@ See the [table below](#keyboard-shortcuts). Modifier combinations work everywher
 search mid-sentence); bare keys like `?` only fire when focus is outside a text field, so typing a
 question mark still types a question mark.
 
+### Full-text search
+
+Search across **every** conversation, not just the open thread — and a real
+inverted index, not `LIKE '%term%'`:
+
+- **SQLite** → an FTS5 external-content virtual table kept in sync by triggers,
+  so the index stores no second copy of message bodies.
+- **Postgres** → a GIN index over `to_tsvector`, with `to_tsquery` (not
+  `plainto_tsquery`, which has no prefix matching) so both engines behave the
+  same as you type.
+
+One dialect-aware migration builds whichever the engine needs, and the identical
+DDL is applied on the `create_all` path so the test suite exercises the real
+index rather than silently degrading. The membership filter lives *inside* the
+search query, so a result can never come from a conversation you cannot open —
+that is asserted in both the API tests and the browser suite.
+
+### Voice messages
+
+Recorded with `MediaRecorder` and sent through the existing attachment pipeline,
+so nothing new was needed server-side. The codec is negotiated rather than
+assumed (Safari and Chrome disagree about what they can produce), the recording
+is capped at 5 minutes, and playback renders a seekable waveform with a live
+countdown.
+
+### Link previews
+
+Open Graph unfurling into a card. The interesting part is that **the server
+fetches a URL a user supplied**, which is a textbook SSRF sink — without care it
+becomes a proxy into your private network and the cloud metadata service. The
+defences, in order:
+
+1. scheme allowlist (`http`/`https` only — no `file://`, `gopher://`, `data:`)
+2. every resolved IP checked against private, loopback, link-local, reserved and
+   multicast ranges **before** connecting
+3. redirects followed manually so **each hop** is re-validated (a public host is
+   free to redirect to `127.0.0.1`)
+4. hard caps on redirects, response size and total time
+5. errors deliberately vague, so this cannot be used to port-scan the network
+
+Tested against loopback, RFC1918, `169.254.169.254` and non-HTTP schemes.
+
+### Message list virtualization
+
+`content-visibility: auto` with `contain-intrinsic-size` lets the browser skip
+layout, style and paint for rows outside the viewport. Chosen over a windowing
+library on purpose: every row stays a real DOM node, so the existing autoscroll,
+scroll-anchoring, jump-to-message and load-older-on-scroll logic all keep
+working untouched — a windowing library would have required rewriting all four.
+
 ### Responsive design
 
 - **Mobile (< 768px):** the conversation list and the thread are separate full-screen views with a
@@ -392,17 +466,111 @@ paint by a tiny inline script, so there is no flash of the wrong theme on reload
 | `Esc` | Close a modal, clear search, or cancel a reply |
 | `?` | Show the shortcuts help |
 
+Modifier combinations work everywhere (⌘K opens search mid-sentence); bare keys
+like `?` only fire outside a text field, so typing a question mark still types
+one.
+
+---
+
+## Running multi-node
+
+The single-node build needs no Redis. Setting `REDIS_URL` is the entire
+difference — `ConnectionManager` is swapped for the Redis implementation at
+startup and nothing in the service layer changes.
+
+```bash
+# Terminal 1 and 2: two independent API processes, one shared Redis + Postgres
+DATABASE_URL=postgresql+asyncpg://you@localhost/signal \
+REDIS_URL=redis://localhost:6379/0 NODE_ID=node-a \
+  uvicorn app.main:app --port 8001
+
+DATABASE_URL=postgresql+asyncpg://you@localhost/signal \
+REDIS_URL=redis://localhost:6379/0 NODE_ID=node-b \
+  uvicorn app.main:app --port 8002
+```
+
+`GET /health` reports which fan-out and database are live, and distinguishes
+sockets held *by this node* from users online *across the cluster* — two numbers
+that diverge the moment a second node joins.
+
+To prove it rather than trust it:
+
+```bash
+python scripts/multinode_check.py
+```
+
+It starts two real uvicorn processes, connects user A to node 1 and user B to
+node 2, and asserts 21 things that every one of which fails if delivery were
+still in-process: cross-node messages, delivery and read receipts in both
+directions, typing, group fan-out, presence snapshot *and* live deltas, a token
+minted on one node accepted by the other, and node death.
+
+**Failure handling.** A node that shuts down gracefully publishes offline deltas
+and is reflected immediately. A node that is `SIGKILL`ed never gets to say
+goodbye, so it is detected by its heartbeat going stale — measured at ~15 s,
+tuned by `NODE_TTL_SECONDS` / `RECONCILE_SECONDS` in `app/ws/redis_manager.py`.
+
+---
+
+## Benchmarks
+
+```bash
+./scripts/benchmark.sh 200 10     # 1 vs 2 vs 3 nodes, same load
+python scripts/loadtest.py --connections 500 --messages 5
+```
+
+`loadtest.py` measures what a user actually feels — **sender's enter key to the
+recipient's device** — not just the server's own ack.
+
+**Horizontal scaling.** 200 concurrent sockets, 1000-message burst, one laptop
+hosting the load generator, Postgres, Redis and every node:
+
+| Nodes | Fan-out | Throughput | Server ack p99 |
+|---|---|---|---|
+| 1 | in-process | 328 msg/s | 2947 ms |
+| 2 | Redis | 393 msg/s | 2071 ms |
+| 3 | Redis | 489 msg/s | 1809 ms |
+
+Scaling is real but sub-linear, and the reason is worth stating: everything is
+competing for one machine's CPU, and all nodes share a single Postgres. The
+server-side ack latency dropping 39% is the cleaner signal that the app tier
+genuinely distributed. These are saturation numbers — a 1000-message instant
+burst is a queueing test, not a typical minute of chat.
+
+**What load testing actually found.** Two bottlenecks that reading the code did
+not reveal:
+
+1. **9 sequential round trips per message.** Membership check, conversation row
+   and member list were three separate `SELECT`s, plus a needless `refresh()`
+   after commit and a user lookup for reply names that almost never applied.
+   Collapsed to 4. *SQLite: 116 → 180 msg/s, p99 7733 → 5394 ms.*
+2. **The connection pool was SQLAlchemy's default** — `pool_size=5,
+   max_overflow=10` capped the server at 15 concurrent transactions, with a
+   `SELECT 1` on every checkout from `pool_pre_ping`. *Postgres: 282 → 328
+   msg/s.*
+
+**Engine comparison** (identical load, single node): Postgres delivered +57%
+throughput and −41% p99 versus SQLite, which is the concrete version of "SQLite's
+single writer is the first thing to break under concurrency."
+
 ---
 
 ## Testing
 
 ```bash
 cd backend
-pytest -q                                  # 59 unit + API tests
+pytest -q                                  # 87 unit + API tests
+
+# The same suite against Postgres - the DB-agnostic claim, proven
+TEST_DATABASE_URL=postgresql+asyncpg://you@localhost/signal_test pytest -q
 
 # End-to-end against a running server (REST + live sockets, 3 concurrent users)
 uvicorn app.main:app --port 8010 &
 python scripts/e2e_check.py                # 67 checks
+```
+
+```bash
+python scripts/multinode_check.py          # 21 cross-node assertions
 ```
 
 `scripts/e2e_check.py` drives the real stack the way a browser does and asserts the things that are
@@ -412,12 +580,17 @@ both read and write, rate limiting, presence on connect/disconnect, and reconnec
 
 Point it at a deployment with `E2E_HOST=https://your-api.example.com python scripts/e2e_check.py`.
 
+> The browser suites assume a freshly seeded database (they assert on seeded
+> history). Reset with `rm -f backend/signal.db*` before a full run.
+
 **Frontend:** `npm run typecheck` and `npm run build`. The UI was additionally driven in a real
-browser with two live sessions side by side — 57 assertions across login, live send/receive, tick
+browser with two live sessions side by side — 72 assertions across login, live send/receive, tick
 progression, typing, persistence across refresh, group creation and fan-out, member management,
 search, placeholders, theme toggle, image and file attachments (upload, inline render, lightbox,
 download link), disappearing messages (picker, system message, timer glyphs, delivery), every
-keyboard shortcut, and the mobile/tablet/desktop layouts.
+keyboard shortcut, full-text search (including that one user cannot search
+another's conversation), link preview cards, voice recording and playback, and
+the mobile/tablet/desktop layouts.
 
 ---
 
@@ -467,8 +640,14 @@ Called out deliberately rather than hidden:
 - **Presence and connections are per-process.** Documented as the exact swap point for Redis.
   A second instance today would mean two users on different nodes not seeing each other live —
   which is precisely what `RedisConnectionManager` fixes.
-- **Rate limiting is in-process** (20 messages / 10s / user). A guard rail for the demo; a Redis
-  token bucket for real deployment.
+- **Rate limiting is in-process** (20 messages / 10s / user), so it is per-node
+  rather than per-cluster. A Redis token bucket is the multi-node version.
+- **Presence is eventually consistent across nodes.** Pub/sub deltas make it
+  feel instant, but a node that dies without shutting down cleanly leaves its
+  users reported online for up to ~15s until its heartbeat goes stale. That
+  window is a tuning choice, not a bug — tighter costs more Redis chatter.
+- **Link previews are cached in-process**, so each node fetches a given URL
+  once. A shared Redis cache would be the multi-node version.
 - **Attachments are stored on local disk** under `MEDIA_ROOT` and served from `/media`. That needs a
   persistent volume in production (the same one as the database). Object storage is the real answer
   at scale and is confined to `attachment_service.py`. Uploaded files are not virus-scanned, and
