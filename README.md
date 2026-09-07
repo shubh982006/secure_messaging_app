@@ -609,7 +609,23 @@ SEED_ON_STARTUP=true
 MEDIA_ROOT=/data/media                     # uploads live on the same volume as the DB
 ```
 
-> Render's free tier cold-starts and drops idle WebSockets, so prefer Railway or Fly for the demo.
+**Backend — Render.** WebSockets work on every Render plan including free, and `render.yaml`
+at the repo root is a Blueprint that provisions the API *and* a free Postgres in one step:
+**New → Blueprint → pick this repo**. `DATABASE_URL` is wired automatically and `JWT_SECRET` is
+generated; only `CORS_ORIGINS` needs filling in once the frontend is up.
+
+Render hands out driver-less `postgresql://` URLs, which SQLAlchemy would resolve to psycopg2 — a
+driver this project does not install. A validator in `app/core/config.py` pins `asyncpg` onto the
+URL, so the platform's injected value works unedited. Verified end to end: migrations, seed, OTP
+login and `/health` reporting `"database":"postgres"`.
+
+Two free-tier limits worth knowing before you demo on it:
+
+- **Instances sleep after ~15 minutes idle**, and the cold start takes up to a minute. The first
+  request after a quiet spell looks like a hang. Railway or Fly avoid this.
+- **No persistent disk on free**, which is why the Blueprint uses Postgres rather than SQLite.
+  Message history persists; uploaded attachments sit on ephemeral storage and are lost on restart.
+  A paid instance with a disk mounted at `/data` fixes that — set `MEDIA_ROOT=/data/media`.
 
 **Frontend — Vercel.** Set `NEXT_PUBLIC_API_URL=https://your-api.up.railway.app`. The WebSocket URL
 is derived automatically (`https` → `wss`); override with `NEXT_PUBLIC_WS_URL` if the socket lives

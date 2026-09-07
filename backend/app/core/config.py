@@ -7,6 +7,7 @@ production (Postgres) without a code change - see SYSTEM_DESIGN.md section 9.
 import json
 from functools import cached_property, lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -72,6 +73,23 @@ class Settings(BaseSettings):
     rate_limit_messages: int = 20
     rate_limit_window_seconds: int = 10
     typing_relay_ttl_seconds: int = 5
+
+    @field_validator("database_url")
+    @classmethod
+    def _pin_async_driver(cls, value: str) -> str:
+        """Managed Postgres add-ons hand out driver-less connection strings.
+
+        Render and Heroku emit `postgres://` / `postgresql://`, which SQLAlchemy
+        resolves to psycopg2 - a driver this project deliberately does not
+        install. Pinning asyncpg here means the platform's own auto-injected URL
+        works unedited, and it is the one place every consumer reads (the engine,
+        the boot migration in db/bootstrap.py, and alembic/env.py).
+        """
+        if value.startswith("postgres://"):
+            value = "postgresql://" + value[len("postgres://") :]
+        if value.startswith("postgresql://"):
+            value = "postgresql+asyncpg://" + value[len("postgresql://") :]
+        return value
 
     @cached_property
     def cors_origin_list(self) -> list[str]:
