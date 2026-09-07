@@ -25,7 +25,7 @@ from app.core.errors import AppError
 from app.db.session import dispose_engine
 from app.services import attachment_service
 from app.ws.gateway import websocket_endpoint
-from app.ws.manager import connection_manager
+from app.ws import manager as ws_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +43,9 @@ async def lifespan(_: FastAPI):
 
     await prepare_database()
 
+    # Single node -> in-process dict. REDIS_URL set -> Redis Pub/Sub fan-out.
+    fanout = await ws_manager.configure_manager()
+
     # Disappearing messages: expiry is enforced at query time, and this loop
     # reclaims the rows and notifies open clients.
     sweeper = asyncio.create_task(
@@ -56,6 +59,9 @@ async def lifespan(_: FastAPI):
             await sweeper
         except asyncio.CancelledError:
             pass
+        stop = getattr(fanout, "stop", None)
+        if stop is not None:
+            await stop()
         await dispose_engine()
 
 
@@ -184,11 +190,17 @@ async def ws(websocket: WebSocket, token: str | None = None) -> None:
 
 @app.get("/health", tags=["ops"])
 async def health() -> dict:
+    manager = ws_manager.connection_manager
     return {
         "status": "ok",
         "service": settings.app_name,
-        "live_sockets": getattr(connection_manager, "connection_count", lambda: 0)(),
-        "online_users": len(connection_manager.online_users()),
+        # Sockets held by THIS node vs users online across the whole cluster -
+        # the two numbers diverge as soon as a second node joins.
+        "live_sockets": getattr(manager, "connection_count", lambda: 0)(),
+        "online_users": len(manager.online_users()),
+        "fanout": "redis" if settings.multi_node else "in-process",
+        "node_id": getattr(manager, "node_id", "single"),
+        "database": "postgres" if settings.is_postgres else "sqlite",
     }
 
 

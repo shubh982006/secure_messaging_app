@@ -50,6 +50,38 @@ async def require_admin(
     return member
 
 
+async def load_send_context(
+    db: AsyncSession, conversation_id: str, user_id: str
+) -> tuple[Conversation, list[ConversationMember], ConversationMember]:
+    """Everything the send path needs, in a single round trip.
+
+    The hot path used to issue three separate SELECTs (membership check,
+    conversation row, member list). Under a burst that dominated latency, so
+    they are collapsed into one join here and the sender's own membership is
+    picked out in Python.
+    """
+    rows = (
+        await db.execute(
+            select(Conversation, ConversationMember)
+            .join(
+                ConversationMember,
+                ConversationMember.conversation_id == Conversation.id,
+            )
+            .where(Conversation.id == conversation_id)
+        )
+    ).all()
+    if not rows:
+        raise ConversationNotFound()
+
+    conversation = rows[0][0]
+    members = [member for _, member in rows]
+    me = next((m for m in members if m.user_id == user_id), None)
+    if me is None:
+        # 404 rather than 403 so membership cannot be probed by id.
+        raise ConversationNotFound()
+    return conversation, members, me
+
+
 async def members_of(db: AsyncSession, conversation_id: str) -> list[ConversationMember]:
     result = await db.scalars(
         select(ConversationMember).where(

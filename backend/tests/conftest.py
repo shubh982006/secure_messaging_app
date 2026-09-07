@@ -13,7 +13,7 @@ os.environ.setdefault("SEED_ON_STARTUP", "false")
 import httpx  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
-from sqlalchemy.pool import StaticPool  # noqa: E402
+from sqlalchemy.pool import NullPool, StaticPool  # noqa: E402
 
 from app.api.deps import get_db  # noqa: E402
 from app.db.base import Base  # noqa: E402
@@ -28,8 +28,28 @@ def event_loop():
     loop.close()
 
 
+# The suite runs against SQLite by default and against Postgres when asked, so
+# "the domain code is database-agnostic" is something CI proves rather than
+# something the README asserts:
+#
+#   TEST_DATABASE_URL=postgresql+asyncpg://user@localhost/signal_test pytest -q
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+
 @pytest.fixture
 async def engine():
+    if TEST_DATABASE_URL:
+        test_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+        async with test_engine.begin() as connection:
+            # Each test gets a pristine schema; Postgres has no in-memory mode.
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.run_sync(Base.metadata.create_all)
+        yield test_engine
+        async with test_engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+        await test_engine.dispose()
+        return
+
     # One shared in-memory connection so every session sees the same schema.
     test_engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",

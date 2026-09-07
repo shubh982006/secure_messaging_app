@@ -131,7 +131,11 @@ async def send_message(
     attachments: list[dict[str, Any]] | None = None,
 ) -> tuple[Message, bool]:
     """Persist a message and fan it out. Returns ``(message, was_duplicate)``."""
-    member = await access.require_member(db, conversation_id, sender_id)
+    # One round trip for the conversation, its members, and the sender's own
+    # membership row - see access.load_send_context for why.
+    conversation, members, member = await access.load_send_context(
+        db, conversation_id, sender_id
+    )
 
     if message_type == MessageType.TEXT:
         content = (content or "").strip()
@@ -160,7 +164,6 @@ async def send_message(
         if target is None or target.conversation_id != conversation_id:
             raise ValidationError("reply_to_id does not belong to this conversation")
 
-    conversation = await access.get_conversation(db, conversation_id)
     seq = await allocate_seq(db, conversation_id)
     message = Message(
         conversation_id=conversation_id,
@@ -177,23 +180,23 @@ async def send_message(
             else None
         ),
     )
-    db.add(message)
-    if attachments:
-        # message.id is assigned on flush; attachments reference it.
-        await db.flush()
-
-    for attachment in attachments or []:
-        db.add(
-            Attachment(
-                message_id=message.id,
-                url=attachment["url"],
-                name=attachment.get("name"),
-                mime_type=attachment.get("mime_type"),
-                size_bytes=attachment.get("size_bytes"),
-                width=attachment.get("width"),
-                height=attachment.get("height"),
-            )
+    # Populate the collections up front rather than letting them lazy-load after
+    # commit: a brand-new message provably has no reactions, and its attachments
+    # are right here. Assigning through the relationship also lets the cascade
+    # set the foreign key, so no extra flush is needed.
+    message.reactions = []
+    message.attachments = [
+        Attachment(
+            url=attachment["url"],
+            name=attachment.get("name"),
+            mime_type=attachment.get("mime_type"),
+            size_bytes=attachment.get("size_bytes"),
+            width=attachment.get("width"),
+            height=attachment.get("height"),
         )
+        for attachment in attachments or []
+    ]
+    db.add(message)
 
     # The sender has, by definition, seen their own message.
     member.last_read_seq = max(member.last_read_seq, seq)
@@ -215,17 +218,31 @@ async def send_message(
             raise
         return existing, True
 
-    await db.refresh(message)
-    await fan_out_new_message(db, message)
+    # No db.refresh(): the session is expire_on_commit=False and every column
+    # was populated at flush, so refreshing would be a round trip for values we
+    # already hold. Members are passed through for the same reason.
+    await fan_out_new_message(db, message, members=members)
     return message, False
 
 
-async def fan_out_new_message(db: AsyncSession, message: Message) -> None:
-    members = await access.members_of(db, message.conversation_id)
+async def fan_out_new_message(
+    db: AsyncSession,
+    message: Message,
+    *,
+    members: list[ConversationMember] | None = None,
+) -> None:
+    if members is None:
+        members = await access.members_of(db, message.conversation_id)
+
     reply_map = await _load_reply_targets(db, [message])
-    user_ids = [m.user_id for m in members]
-    user_ids += [m.sender_id for m in reply_map.values() if m.sender_id]
-    users = await access.users_by_ids(db, user_ids)
+    # User rows are only needed to name the author of a quoted message, so the
+    # common case (no reply) skips the query entirely.
+    users: dict[str, Any] = {}
+    if reply_map:
+        users = await access.users_by_ids(
+            db, [m.sender_id for m in reply_map.values() if m.sender_id]
+        )
+
     payload = serializers.message_payload(
         message,
         members,

@@ -20,13 +20,26 @@ from app.core.config import settings
 
 _connect_args = {"check_same_thread": False} if settings.is_sqlite else {}
 
-engine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    future=True,
-    pool_pre_ping=True,
-    connect_args=_connect_args,
-)
+def _engine_kwargs() -> dict:
+    kwargs: dict = {
+        "echo": False,
+        "future": True,
+        "pool_pre_ping": settings.db_pool_pre_ping,
+        "connect_args": _connect_args,
+    }
+    if not settings.is_sqlite:
+        # SQLite serialises writers anyway, so a bigger pool buys nothing there;
+        # on Postgres it is the difference between 15 concurrent transactions
+        # and 50.
+        kwargs.update(
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_recycle=settings.db_pool_recycle_seconds,
+        )
+    return kwargs
+
+
+engine = create_async_engine(settings.database_url, **_engine_kwargs())
 
 if settings.is_sqlite:
 

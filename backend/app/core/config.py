@@ -40,6 +40,23 @@ class Settings(BaseSettings):
     # import time. Parsing lives in `cors_origin_list` instead.
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
+    # --- connection pool -----------------------------------------------------
+    # Defaults are sized for the concurrency a chat workload actually produces.
+    # SQLAlchemy ships pool_size=5/max_overflow=10, which caps the server at ~15
+    # in-flight transactions - under a send burst that queue *is* the latency.
+    db_pool_size: int = 20
+    db_max_overflow: int = 30
+    db_pool_recycle_seconds: int = 1800
+    # A per-checkout "SELECT 1". Worth it across a flaky network, pure overhead
+    # against a local or same-VPC database, so it is opt-in.
+    db_pool_pre_ping: bool = False
+
+    # --- multi-node ----------------------------------------------------------
+    # Set this and the app switches from in-process fan-out to Redis Pub/Sub,
+    # which is the whole difference between one node and N. Unset = single node.
+    redis_url: str | None = None
+    node_id: str | None = None
+
     # --- behaviour -----------------------------------------------------------
     seed_on_startup: bool = True
     max_message_length: int = 8192
@@ -67,6 +84,14 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def is_postgres(self) -> bool:
+        return self.database_url.startswith("postgresql")
+
+    @property
+    def multi_node(self) -> bool:
+        return bool(self.redis_url)
 
 
 @lru_cache

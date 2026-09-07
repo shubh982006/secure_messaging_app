@@ -105,6 +105,44 @@ class InMemoryConnectionManager(BaseConnectionManager):
         return sum(len(sockets) for sockets in self._connections.values())
 
 
-# The process-wide singleton. Swap this line for RedisConnectionManager() to go
-# multi-node - nothing else in the codebase needs to know.
+# The process-wide singleton. Single-node by default; `configure_manager()`
+# swaps in the Redis implementation at startup when REDIS_URL is set. Nothing
+# else in the codebase needs to know which one is live.
 connection_manager: BaseConnectionManager = InMemoryConnectionManager()
+
+
+def set_manager(manager: BaseConnectionManager) -> None:
+    """Rebind the singleton across every module that imported it by name.
+
+    Services hold a direct reference (`from app.ws.manager import
+    connection_manager`), so rebinding this module's global alone would leave
+    them pointing at the old object.
+    """
+    global connection_manager
+    connection_manager = manager
+
+    import sys
+
+    for module in list(sys.modules.values()):
+        if module is None:
+            continue
+        name = getattr(module, "__name__", "")
+        if not name.startswith("app."):
+            continue
+        if getattr(module, "connection_manager", None) is not None:
+            module.connection_manager = manager
+
+
+async def configure_manager() -> BaseConnectionManager:
+    """Pick the fan-out implementation for this process."""
+    from app.core.config import settings
+
+    if not settings.multi_node:
+        return connection_manager
+
+    from app.ws.redis_manager import RedisConnectionManager
+
+    manager = RedisConnectionManager(settings.redis_url or "", settings.node_id)
+    await manager.start()
+    set_manager(manager)
+    return manager
