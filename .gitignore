@@ -1,0 +1,36 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# Node / Next
+node_modules/
+.next/
+out/
+.turbo/
+next-env.d.ts
+*.tsbuildinfo
+
+# Env
+.env
+.env.local
+.env*.local
+!.env.example
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Uploaded attachments
+backend/media/

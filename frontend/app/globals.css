@@ -1,0 +1,187 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   Signal design tokens
+   Values traced from Signal Desktop's dark theme (the app's default) with a
+   light theme mapped onto the same token names, so every component is written
+   once and themed by CSS variables.
+   ========================================================================== */
+@theme {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+
+  /* Signal's brand blue ("ultramarine") */
+  --color-ultramarine: #2c6bed;
+  --color-ultramarine-hover: #1851b4;
+  --color-ultramarine-light: #3a76f0;
+
+  --color-sig-bg: var(--sig-bg);
+  --color-sig-pane: var(--sig-pane);
+  --color-sig-rail: var(--sig-rail);
+  --color-sig-border: var(--sig-border);
+  --color-sig-hover: var(--sig-hover);
+  --color-sig-active: var(--sig-active);
+  --color-sig-input: var(--sig-input);
+  --color-sig-bubble-in: var(--sig-bubble-in);
+  --color-sig-bubble-out: var(--sig-bubble-out);
+  --color-sig-text: var(--sig-text);
+  --color-sig-text-2: var(--sig-text-2);
+  --color-sig-text-3: var(--sig-text-3);
+  --color-sig-on-accent: var(--sig-on-accent);
+  --color-sig-elevated: var(--sig-elevated);
+  --color-sig-danger: #ff6b6b;
+}
+
+:root {
+  color-scheme: dark;
+
+  --sig-bg: #121212;          /* conversation canvas */
+  --sig-pane: #1b1b1b;        /* left list pane */
+  --sig-rail: #1b1b1b;        /* icon rail */
+  --sig-border: #3b3b3b;
+  --sig-hover: #2e2e2e;
+  --sig-active: #3b3b3b;
+  --sig-input: #2e2e2e;
+  --sig-bubble-in: #3b3b3b;
+  --sig-bubble-out: #2c6bed;
+  --sig-text: #f6f6f6;
+  --sig-text-2: #b9b9b9;
+  --sig-text-3: #848484;
+  --sig-on-accent: #ffffff;
+  --sig-elevated: #2e2e2e;    /* modals, menus */
+  --sig-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --sig-bg: #ffffff;
+  --sig-pane: #f6f6f6;
+  --sig-rail: #ededed;
+  --sig-border: #e9e9e9;
+  --sig-hover: #ebebeb;
+  --sig-active: #e0e0e0;
+  --sig-input: #ededed;
+  --sig-bubble-in: #e9e9e9;
+  --sig-bubble-out: #2c6bed;
+  --sig-text: #121212;
+  --sig-text-2: #5e5e5e;
+  --sig-text-3: #848484;
+  --sig-on-accent: #ffffff;
+  --sig-elevated: #ffffff;
+  --sig-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--sig-bg);
+  color: var(--sig-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Signal's scrollbars: invisible until you interact with the list. */
+.sig-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.sig-scroll:hover {
+  scrollbar-color: var(--sig-border) transparent;
+}
+.sig-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.sig-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sig-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.sig-scroll:hover::-webkit-scrollbar-thumb {
+  background: var(--sig-border);
+  background-clip: content-box;
+}
+
+/* The faint dotted wallpaper behind the conversation, like Signal's canvas. */
+.sig-canvas {
+  background-color: var(--sig-bg);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--sig-text) 4%, transparent) 1px,
+    transparent 0
+  );
+  background-size: 22px 22px;
+}
+
+@keyframes sig-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-up {
+  animation: sig-fade-up 0.16s ease-out;
+}
+
+@keyframes sig-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-pop {
+  animation: sig-pop 0.13s ease-out;
+}
+
+@keyframes sig-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+.typing-dot {
+  animation: sig-typing 1.25s infinite ease-in-out;
+}
+
+textarea {
+  field-sizing: content;
+}
+
+input:focus,
+textarea:focus,
+button:focus {
+  outline: none;
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-ultramarine-light);
+  outline-offset: 2px;
+}
