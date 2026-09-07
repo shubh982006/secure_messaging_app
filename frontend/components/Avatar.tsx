@@ -1,5 +1,6 @@
 "use client";
 
+import { mediaUrl } from "@/lib/api";
 import { avatarColor, initials } from "@/lib/format";
 import { GroupIcon } from "./icons";
 
@@ -35,9 +36,12 @@ export function Avatar({
       style={{ width: size, height: size }}
     >
       {src ? (
+        // An uploaded avatar comes back as a path relative to the API host
+        // ("/media/…"), which would otherwise resolve against the web origin
+        // and 404. mediaUrl passes absolute URLs (a pasted link) through.
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={src}
+          src={mediaUrl(src)}
           alt={name ?? "Avatar"}
           className="h-full w-full rounded-full object-cover"
           style={{ width: size, height: size }}
