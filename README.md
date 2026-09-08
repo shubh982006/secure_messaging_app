@@ -129,21 +129,21 @@ Alice in one and Bob in the other, and put them side by side.
 | Presence / last seen | Done | `presence_service` |
 | Conversation + in-thread search | Done | `ConversationList`, `ChatPane` |
 | Placeholders for calls / stories / linked devices | Done | toasts + `SettingsModal` |
-| **Bonus:** attachments (images / files) | Done | `POST /attachments`, drag-drop + paste, inline images, lightbox |
-| **Bonus:** message reactions | Done | `POST /messages/{id}/reactions` |
-| **Bonus:** reply / quote | Done | `reply_to_id` + quoted block in bubble |
-| **Bonus:** disappearing messages | Done | per-conversation retention + server sweeper |
-| **Bonus:** dark / light mode | Done | CSS variables, toggle in Settings or `⌘⇧D` |
-| **Bonus:** responsive (mobile / tablet / desktop) | Done | list and thread are separate screens below `md` |
-| **Bonus:** keyboard shortcuts | Done | `lib/shortcuts.ts`, help modal on `?` |
-| **Bonus:** full-text search across all chats | Done | SQLite FTS5 / Postgres GIN, `app/services/search_service.py` |
-| **Bonus:** voice messages | Done | MediaRecorder → attachment pipeline, seekable waveform player |
-| **Bonus:** link previews (Open Graph) | Done | `app/services/link_service.py`, SSRF-hardened |
-| **Bonus:** message list virtualization | Done | CSS containment, no windowing library |
+| Attachments (images / files) | Done | `POST /attachments`, drag-drop + paste, inline images, lightbox |
+| Message reactions | Done | `POST /messages/{id}/reactions` |
+| Reply / quote | Done | `reply_to_id` + quoted block in bubble |
+| Disappearing messages | Done | per-conversation retention + server sweeper |
+| Dark / light mode | Done | CSS variables, toggle in Settings or `⌘⇧D` |
+| Responsive (mobile / tablet / desktop) | Done | list and thread are separate screens below `md` |
+| Keyboard shortcuts | Done | `lib/shortcuts.ts`, help modal on `?` |
+| Full-text search across all chats | Done | SQLite FTS5 / Postgres GIN, `app/services/search_service.py` |
+| Voice messages | Done | MediaRecorder → attachment pipeline, seekable waveform player |
+| Link previews (Open Graph) | Done | `app/services/link_service.py`, SSRF-hardened |
+| Message list virtualization | Done | CSS containment, no windowing library |
 | **Scale:** multi-node Redis fan-out | Done | `app/ws/redis_manager.py` + `scripts/multinode_check.py` |
 | **Scale:** Postgres | Done | same migrations, same tests, zero code changes |
-| **Bonus:** message delete (tombstone) | Done | soft delete |
-| **Bonus:** mute per conversation | Done | per-member flag |
+| Message delete (tombstone) | Done | soft delete |
+| Mute per conversation | Done | per-member flag |
 | Real E2E encryption | Mocked | plaintext storage; see [Assumptions](#assumptions-and-known-limits) |
 
 ---
